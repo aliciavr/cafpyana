@@ -2,6 +2,7 @@
 Kaon analysis data frame maker
 """
 
+import numpy as np
 import pandas as pd
 
 import makedf.makedf as makedf
@@ -22,6 +23,15 @@ KMASS = {
 TRUE_KE_CUT = 0.
 
 
+def signal(df: pd.DataFrame, ktype: str, cc: bool=True) -> pd.DataFrame:
+    # InFV requires inzback but it does nothing for SBND case
+    # put NaN here so we'll hopefully get an error if this ever changes
+    is_true_fv = util.InFV(df.position, inzback=np.nan, det='SBND')
+    has_k = (getattr(df, f'n{ktype}') > 0)
+    cc_nc = (df.iscc == cc)
+    return is_true_fv & cc_nc & has_k
+
+
 def make_kaon_mcdf(f: pd.DataFrame) -> pd.DataFrame:
     mcdf = makedf.make_mcdf(f)
     mcprimdf = makedf.make_mcprimdf(f)
@@ -38,4 +48,17 @@ def make_kaon_mcdf(f: pd.DataFrame) -> pd.DataFrame:
         kdf.columns = pd.MultiIndex.from_tuples([tuple([kname] + list(c)) for c in kdf.columns])
         mcdf = pd_helpers.multicol_merge(mcdf, kdf, left_index=True, right_index=True, how="left", validate="one_to_one")
 
+    mcdf['is_signal_kp_cc'] = signal(mcdf, ktype='kplus', cc=True)
+    mcdf['is_signal_kp_nc'] = signal(mcdf, ktype='kplus', cc=False)
+
     return mcdf
+
+
+def make_kaon_recodf(f: pd.DataFrame) -> pd.DataFrame:
+    pandora_df = makedf.make_pandora_df(f)
+
+    # precuts
+    pandora_df = pandora_df[util.InFV(pandora_df.slc.vertex, inzback=np.nan, det='SBND')]
+    pandora_df = pandora_df[pandora_df.slc.is_clear_cosmic == 0]
+
+    return pandora_df
