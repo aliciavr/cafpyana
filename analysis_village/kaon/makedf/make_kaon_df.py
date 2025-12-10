@@ -38,36 +38,27 @@ InFV_SBND = functools.partial(util.InFV, inzback=np.nan, det='SBND')
 
 
 def signal(df: pd.DataFrame, ktype: str, cc: bool=True) -> pd.DataFrame:
-    """Signal definition for mcdf."""
+    """
+    Signal definition for mcdf.
+    Final state kaon from (CC, NC) interaction that decays within the FV
+    """
     is_true_fv = InFV_SBND(df.position, inzback=np.nan, det='SBND')
+
+    # Kaon decayed (no hadronic interaction)
+    is_decay = df.primary.end_process == 3
 
     # TODO daughter particle containment cut
 
     has_k = (getattr(df, f'n{ktype}') > 0)
     cc_nc = (df.iscc == cc)
-    return is_true_fv & cc_nc & has_k
+    return is_true_fv & cc_nc & is_decay & has_k
 
 
 def make_kaon_mcdf(f: pd.DataFrame) -> pd.DataFrame:
-    mcdf = makedf.make_mcdf(f)
-
+    mcdf = ph.loadbranches(f["recTree"], branches.mcbranches).rec.mc.nu
     mcprimdf = ph.loadbranches(f["recTree"], PRIM_BRANCHES).rec.mc.nu.prim
 
-    # daughter info
-    tpartdf = ph.loadbranches(f["recTree"], branches.trueparticlebranches).rec.true_particles
-    tpartdf = tpartdf.reset_index().set_index(['entry', 'G4ID'])
-
-    mcprimdaughtersdf = makedf.make_mcprimdaughtersdf(f).rec.mc.nu.prim
-    daughterdf = mcprimdaughtersdf[mcprimdaughtersdf.index.droplevel(-1).isin(mcprimdf.index)]
-    daughter_tpartdf = tpartdf[
-        tpartdf.index.isin(pd.MultiIndex.from_frame(daughterdf.reset_index()[['entry', 'daughters']]))
-    ]
-    daughterdf = ph.multicol_merge(daughterdf, daughter_tpartdf, how="left", left_on=['entry', 'daughters'], right_index=True)
-    mcprimdf = ph.multicol_add(mcprimdf, daughterdf.groupby(level=[0, 1, 2]).size().rename('ndaughters'))
-
-    mcdf = ph.multicol_merge(mcdf, mcprimdf, how="left", left_index=True, right_index=True, validate="one_to_one")
-
-    # add kaon info: Number above threshold & primary info
+    # add number of primaries above threshold
     for kname in ('kplus', 'kzero'):
         # number of kaons above KE threshold
         ke = mcprimdf[mcprimdf.pdg==KPDG[kname]].genE - KMASS[kname] 
@@ -81,6 +72,27 @@ def make_kaon_mcdf(f: pd.DataFrame) -> pd.DataFrame:
         kdf.columns = pd.MultiIndex.from_tuples([tuple([kname] + list(c)) for c in kdf.columns])
         mcdf = ph.multicol_merge(mcdf, kdf, how="left", left_index=True, right_index=True, validate="one_to_one")
         '''
+
+    # daughter info
+    tpartdf = ph.loadbranches(f["recTree"], branches.trueparticlebranches).rec.true_particles
+    tpartdf = tpartdf.reset_index().set_index(['entry', 'G4ID'])
+
+    mcprimdaughtersdf = makedf.make_mcprimdaughtersdf(f).rec.mc.nu.prim
+    daughterdf = mcprimdaughtersdf[mcprimdaughtersdf.index.droplevel(-1).isin(mcprimdf.index)]
+    daughter_tpartdf = tpartdf[
+        tpartdf.index.isin(pd.MultiIndex.from_frame(daughterdf.reset_index()[['entry', 'daughters']]))
+    ]
+    daughter_tpartdf.columns = pd.MultiIndex.from_tuples([tuple(['daughter'] + list(c)) for c in daughter_tpartdf.columns])
+    daughterdf = ph.multicol_merge(daughterdf, daughter_tpartdf, how="left", left_on=['entry', 'daughters'], right_index=True)
+
+    # merge daughters into primaries
+    # rename columns coming from primary df first
+    mcprimdf.columns = pd.MultiIndex.from_tuples([tuple(['primary'] + list(c)) for c in mcprimdf.columns])
+    mcprimdf = ph.multicol_merge(mcprimdf, daughterdf, how="left", left_index=True, right_index=True, validate="one_to_many")
+    mcprimdf = ph.multicol_add(mcprimdf, daughterdf.groupby(level=[0, 1, 2]).size().rename('ndaughters'))
+
+    # finally, merge primaries into mc
+    mcdf = ph.multicol_merge(mcdf, mcprimdf, how="left", left_index=True, right_index=True, validate="one_to_one")
 
     mcdf['is_signal_kp_cc'] = signal(mcdf, ktype='kplus', cc=True)
     mcdf['is_signal_kp_nc'] = signal(mcdf, ktype='kplus', cc=False)
