@@ -42,18 +42,19 @@ def signal(df: pd.DataFrame, ktype: str, cc: bool=True) -> pd.DataFrame:
     is_true_fv = InFV_SBND(df.position)
 
     # There must be a kaon
-    has_k = (df.is_primary & (df.pdg == KPDG[ktype])).groupby(level=[0, 1, 2]).any()
+    has_k = (getattr(df, f'n{ktype}') > 0)
 
     # kplus: kaon must have a muon daughter
     # this means most hadronic interactions are not counted, but possibly
     # some non-destructive hadronic interactions are?
     has_daughter = True
     if ktype == 'kplus':
-        has_daughter = (~df.is_primary & (df.pdg == -13) & (InFV_SBND(df.end))).groupby(level=[0, 1, 2]).any()
+        daughter_mu_rows = (~df.is_primary & (df.pdg == -13) & (InFV_SBND(df.end)))
+        has_daughter = df.index.droplevel([-1, -2]).isin(daughter_mu_rows.index.droplevel([-1, -2]))
 
-    has_k = (getattr(df, f'n{ktype}') > 0)
     cc_nc = (df.iscc == cc)
-    return is_true_fv & cc_nc & has_k & has_daughter
+
+    return is_true_fv & has_k & cc_nc & has_daughter
 
 
 def make_kaon_mcdf(f: pd.DataFrame) -> pd.DataFrame:
