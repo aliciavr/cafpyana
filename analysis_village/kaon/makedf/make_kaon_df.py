@@ -24,12 +24,9 @@ KMASS = {
 # TODO pick a better number
 TRUE_KE_CUT = 0.
 
-# add some extra branches into primary ones, use set to make sure it stays
-# unique even if mcprimbranches changes in the future
-PRIM_BRANCHES = list(set(branches.mcprimbranches + [
-    'rec.mc.nu.prim.G4ID',
-    'rec.mc.nu.prim.end_process',
-]))
+# For daughter df merging: This ensures we use the equivalent mc.nu.prim branch
+# names (SRTrueParticle) as the daughter branches
+PRIM_BRANCHES = list(set(b.replace('.true_particles.', '.mc.nu.prim.') for b in branches.trueparticlebranches))
 
 
 # InFV requires inzback but it does nothing for SBND case
@@ -42,21 +39,33 @@ def signal(df: pd.DataFrame, ktype: str, cc: bool=True) -> pd.DataFrame:
     Signal definition for mcdf.
     Final state kaon from (CC, NC) interaction that decays within the FV
     """
-    is_true_fv = InFV_SBND(df.position, inzback=np.nan, det='SBND')
+    is_true_fv = InFV_SBND(df.position)
 
-    # Kaon decayed (no hadronic interaction)
-    is_decay = df.primary.end_process == 3
+    # There must be a kaon
+    has_k = (df.is_primary & (df.pdg == KPDG[ktype])).groupby(level=[0, 1, 2]).any()
 
-    # TODO daughter particle containment cut
+    # kplus: kaon must have a muon daughter
+    # this means most hadronic interactions are not counted, but possibly
+    # some non-destructive hadronic interactions are?
+    has_daughter = True
+    if ktype == 'kplus':
+        has_daughter = (~df.is_primary & (df.pdg == -13) & (InFV_SBND(df.end))).groupby(level=[0, 1, 2]).any()
 
     has_k = (getattr(df, f'n{ktype}') > 0)
     cc_nc = (df.iscc == cc)
-    return is_true_fv & cc_nc & is_decay & has_k
+    return is_true_fv & cc_nc & has_k & has_daughter
 
 
 def make_kaon_mcdf(f: pd.DataFrame) -> pd.DataFrame:
     mcdf = ph.loadbranches(f["recTree"], branches.mcbranches).rec.mc.nu
+    # prevent name clash with mcprim pdg column
+    mcdf.columns = [
+        ('nu_pdg', '') if col == ('pdg', '') else col
+        for col in mcdf.columns
+    ]
+
     mcprimdf = ph.loadbranches(f["recTree"], PRIM_BRANCHES).rec.mc.nu.prim
+    mcprimdf['is_primary'] = True
 
     # add number of primaries above threshold
     for kname in ('kplus', 'kzero'):
@@ -82,14 +91,20 @@ def make_kaon_mcdf(f: pd.DataFrame) -> pd.DataFrame:
     daughter_tpartdf = tpartdf[
         tpartdf.index.isin(pd.MultiIndex.from_frame(daughterdf.reset_index()[['entry', 'daughters']]))
     ]
-    daughter_tpartdf.columns = pd.MultiIndex.from_tuples([tuple(['daughter'] + list(c)) for c in daughter_tpartdf.columns])
     daughterdf = ph.multicol_merge(daughterdf, daughter_tpartdf, how="left", left_on=['entry', 'daughters'], right_index=True)
+    daughterdf['is_primary'] = False
+    daughterdf = daughterdf.drop(columns=[('rec.true_particles..index', '', '', '')])
 
-    # merge daughters into primaries
-    # rename columns coming from primary df first
-    mcprimdf.columns = pd.MultiIndex.from_tuples([tuple(['primary'] + list(c)) for c in mcprimdf.columns])
-    mcprimdf = ph.multicol_merge(mcprimdf, daughterdf, how="left", left_index=True, right_index=True, validate="one_to_many")
-    mcprimdf = ph.multicol_add(mcprimdf, daughterdf.groupby(level=[0, 1, 2]).size().rename('ndaughters'))
+    # .rename doesn't work for me, so do this instead
+    daughterdf.columns = [
+        ('G4ID', '', '', '') if col == ('daughters', '', '', '') else col
+        for col in daughterdf.columns
+    ]
+
+    # add daughter index to primaries as "-1" to allow concat
+    mcprimdf["rec.mc.nu.prim.daughters..index"] = -1
+    mcprimdf = mcprimdf.set_index("rec.mc.nu.prim.daughters..index", append=True)
+    mcprimdf = pd.concat([mcprimdf, daughterdf], sort=True).sort_index()
 
     # finally, merge primaries into mc
     mcdf = ph.multicol_merge(mcdf, mcprimdf, how="left", left_index=True, right_index=True, validate="one_to_one")
@@ -104,7 +119,7 @@ def make_kaon_recodf(f: pd.DataFrame) -> pd.DataFrame:
     pandora_df = makedf.make_pandora_df(f)
 
     # precuts
-    pandora_df = pandora_df[InFV_SBND(pandora_df.slc.vertex, inzback=np.nan, det='SBND')]
+    pandora_df = pandora_df[InFV_SBND(pandora_df.slc.vertex)]
     pandora_df = pandora_df[pandora_df.slc.is_clear_cosmic == 0]
 
     # daughter info
