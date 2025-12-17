@@ -49,8 +49,28 @@ def signal(df: pd.DataFrame, ktype: str, cc: bool=True) -> pd.DataFrame:
     # some non-destructive hadronic interactions are?
     has_daughter = True
     if ktype == 'kplus':
-        daughter_mu_rows = (~df.is_primary & (df.pdg == -13) & (InFV_SBND(df.end)))
-        has_daughter = df.index.droplevel([-1, -2]).isin(daughter_mu_rows.index.droplevel([-1, -2]))
+        """
+        # example event: we want to mark all these rows as "true" since the event
+        # contains a kaon + mu daughter (regardless of other primaries)
+        entry  rec.mc.nu..index  rec.mc.nu.prim..index  rec.mc.nu.prim.daughters..index
+        23     0                 1                      -1                                 3222
+                                                         0                                  211
+                                                         1                                 2112
+                                 2                      -1                                  321
+                                                         0                                   14
+                                                         1                                  -13
+        """
+        daughter_rows = (~df.is_primary & ((df.pdg == -13) | (df.pdg == 211)) & (InFV_SBND(df.end)))
+        primary_k_rows = (df.is_primary & (df.pdg == KPDG[ktype]))
+
+        # true for entry,mcnu index,prim index rows, false otherwise
+        k_has_daughter = df[
+            (df.index.droplevel(-1).isin(df[primary_k_rows].index.droplevel(-1))) \
+            & (df.index.droplevel(-1).isin(df[daughter_rows].index.droplevel(-1)))
+        ]
+
+        # true for entry, mcnu index rows
+        has_daughter = (df.index.droplevel([-1, -2]).isin(k_has_daughter.index.droplevel([-1, -2])))
 
     cc_nc = (df.iscc == cc)
 
