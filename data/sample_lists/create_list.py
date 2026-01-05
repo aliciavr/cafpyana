@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Output XRootD URLs for a samweb definition
+# Program will print to stdout. Redirect to a list via ./create_list.py > list.txt
 
 import sys
 import argparse
