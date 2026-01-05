@@ -144,6 +144,21 @@ def make_kaon_recodf(f: pd.DataFrame) -> pd.DataFrame:
     pandora_df = pandora_df[pandora_df.slc.is_clear_cosmic == 0]
 
     # daughter info
-    daughterdf = ph.loadbranches(f["recTree"], branches.pfp_daughter_branch)
+    # daughterdf = ph.loadbranches(f["recTree"], branches.pfp_daughter_branch)
 
     return pandora_df
+
+
+def make_kaon_mcdf_lite(f: pd.DataFrame) -> pd.DataFrame:
+    """Bare-bones check for k events."""
+    df = ph.loadbranches(f["recTree"], ['rec.mc.nu.prim.pdg', 'rec.mc.nu.prim.genE']).rec.mc.nu.prim
+    for kname in ('kplus', 'kzero'):
+        ke = df[df.pdg==KPDG[kname]].genE - KMASS[kname] 
+        df = ph.multicol_add(df, ((df.pdg==KPDG[kname]) \
+                                              & (ke > TRUE_KE_CUT)).groupby(level=[0, 1]).sum().rename(f'n{kname}'))
+
+    return (df[(df.nkplus > 0) | (df.nkzero > 0)]
+            .drop(['pdg', 'genE'], axis=1)
+            .droplevel(-1)
+            .groupby(level=[0,1]).first()
+    )
