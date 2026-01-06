@@ -34,13 +34,39 @@ PRIM_BRANCHES = list(set(b.replace('.true_particles.', '.mc.nu.prim.') for b in 
 InFV_SBND = functools.partial(util.InFV, inzback=np.nan, det='SBND')
 
 
+def k_has_daughter(df: pd.DataFrame, ktype: str, require_contained: bool=True) -> pd.DataFrame:
+    """
+    # example event: we want to mark all these rows as "true" since the event
+    # contains a kaon + mu daughter (regardless of other primaries)
+    entry  rec.mc.nu..index  rec.mc.nu.prim..index  rec.mc.nu.prim.daughters..index
+    23     0                 1                      -1                                 3222
+                                                     0                                  211
+                                                     1                                 2112
+                             2                      -1                                  321
+                                                     0                                   14
+                                                     1                                  -13
+    """
+    daughter_rows = ~df.is_primary & ((df.pdg == -13) | (df.pdg == 211)) 
+    if require_contained:
+        daughter_rows &= InFV_SBND(df.end)
+
+    primary_k_rows = (df.is_primary & (df.pdg == KPDG[ktype]))
+
+    # true for entry,mcnu index,prim index rows, false otherwise
+    k_has_daughter = df[
+        (df.index.droplevel(-1).isin(df[primary_k_rows].index.droplevel(-1))) \
+        & (df.index.droplevel(-1).isin(df[daughter_rows].index.droplevel(-1)))
+    ]
+
+    # true for entry, mcnu index rows
+    return (df.index.droplevel([-1, -2]).isin(k_has_daughter.index.droplevel([-1, -2])))
+
+
 def signal(df: pd.DataFrame, ktype: str, cc: bool=True) -> pd.DataFrame:
     """
     Signal definition for mcdf.
     Final state kaon from (CC, NC) interaction that decays within the FV
     """
-    is_true_fv = InFV_SBND(df.position)
-
     # There must be a kaon
     has_k = (getattr(df, f'n{ktype}') > 0)
 
@@ -49,35 +75,14 @@ def signal(df: pd.DataFrame, ktype: str, cc: bool=True) -> pd.DataFrame:
     # some non-destructive hadronic interactions are?
     has_daughter = True
     if ktype == 'kplus':
-        """
-        # example event: we want to mark all these rows as "true" since the event
-        # contains a kaon + mu daughter (regardless of other primaries)
-        entry  rec.mc.nu..index  rec.mc.nu.prim..index  rec.mc.nu.prim.daughters..index
-        23     0                 1                      -1                                 3222
-                                                         0                                  211
-                                                         1                                 2112
-                                 2                      -1                                  321
-                                                         0                                   14
-                                                         1                                  -13
-        """
-        daughter_rows = (~df.is_primary & ((df.pdg == -13) | (df.pdg == 211)) & (InFV_SBND(df.end)))
-        primary_k_rows = (df.is_primary & (df.pdg == KPDG[ktype]))
-
-        # true for entry,mcnu index,prim index rows, false otherwise
-        k_has_daughter = df[
-            (df.index.droplevel(-1).isin(df[primary_k_rows].index.droplevel(-1))) \
-            & (df.index.droplevel(-1).isin(df[daughter_rows].index.droplevel(-1)))
-        ]
-
-        # true for entry, mcnu index rows
-        has_daughter = (df.index.droplevel([-1, -2]).isin(k_has_daughter.index.droplevel([-1, -2])))
+        has_daughter = k_has_daughter(df, ktype, require_contained=True)
 
     cc_nc = (df.iscc == cc)
 
-    return is_true_fv & has_k & cc_nc & has_daughter
+    return df.is_true_fv & has_k & cc_nc & has_daughter
 
 
-def make_kaon_mcdf(f: pd.DataFrame) -> pd.DataFrame:
+def make_kaon_mcdf(f: pd.DataFrame, signal_cut_columns: bool=False) -> pd.DataFrame:
     mcdf = ph.loadbranches(f["recTree"], branches.mcbranches).rec.mc.nu
     # prevent name clash with mcprim pdg column
     mcdf.columns = [
@@ -94,14 +99,6 @@ def make_kaon_mcdf(f: pd.DataFrame) -> pd.DataFrame:
         ke = mcprimdf[mcprimdf.pdg==KPDG[kname]].genE - KMASS[kname] 
         mcdf = ph.multicol_add(mcdf, ((mcprimdf.pdg==KPDG[kname]) \
                                               & (ke > TRUE_KE_CUT)).groupby(level=[0, 1]).sum().rename(f'n{kname}'))
-
-        '''
-        # kaon primary info
-        kdf = mcprimdf[mcprimdf.pdg==KPDG[kname]]
-
-        kdf.columns = pd.MultiIndex.from_tuples([tuple([kname] + list(c)) for c in kdf.columns])
-        mcdf = ph.multicol_merge(mcdf, kdf, how="left", left_index=True, right_index=True, validate="one_to_one")
-        '''
 
     # daughter info
     tpartdf = ph.loadbranches(f["recTree"], branches.trueparticlebranches).rec.true_particles
@@ -130,10 +127,20 @@ def make_kaon_mcdf(f: pd.DataFrame) -> pd.DataFrame:
     # finally, merge primaries into mc
     mcdf = ph.multicol_merge(mcdf, mcprimdf, how="left", left_index=True, right_index=True, validate="one_to_one")
 
+    mcdf['is_true_fv'] = InFV_SBND(df.position)
     mcdf['is_signal_kp_cc'] = signal(mcdf, ktype='kplus', cc=True)
     mcdf['is_signal_kp_nc'] = signal(mcdf, ktype='kplus', cc=False)
 
+    # extra columns for truth studies
+    if signal_cut_columns:
+        mcdf['has_daughter'] = k_has_daughter(mcdf, 'kplus', require_contained=False)
+        mcdf['has_daughter_cont'] = k_has_daughter(mcdf, 'kplus', require_contained=True)
+
     return mcdf
+
+
+# use this in configs
+make_kaon_mcdf_truthcols = functools.partial(make_kaon_mcdf, signal_cut_columns=True)
 
 
 def make_kaon_recodf(f: pd.DataFrame) -> pd.DataFrame:
@@ -150,7 +157,7 @@ def make_kaon_recodf(f: pd.DataFrame) -> pd.DataFrame:
 
 
 def make_kaon_mcdf_lite(f: pd.DataFrame) -> pd.DataFrame:
-    """Bare-bones check for k events."""
+    """Bare-bones check for any k events."""
     df = ph.loadbranches(f["recTree"], ['rec.mc.nu.prim.pdg', 'rec.mc.nu.prim.genE']).rec.mc.nu.prim
     for kname in ('kplus', 'kzero'):
         ke = df[df.pdg==KPDG[kname]].genE - KMASS[kname] 
