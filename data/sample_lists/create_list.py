@@ -2,6 +2,9 @@
 # Output XRootD URLs for a samweb definition
 # Program will print to stdout. Redirect to a list via ./create_list.py > list.txt
 
+# Output XRootD URLs for a samweb definition
+# Program will print to stdout. Redirect to a file using `./create_list.py DEFINITION > file.txt`
+
 import sys
 import argparse
 
