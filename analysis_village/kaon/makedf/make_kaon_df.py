@@ -32,6 +32,7 @@ PRIM_BRANCHES = list(set(b.replace('.true_particles.', '.mc.nu.prim.') for b in 
 # InFV requires inzback but it does nothing for SBND case
 # put NaN here so we'll hopefully get an error if this ever changes
 InFV_SBND = functools.partial(util.InFV, inzback=np.nan, det='SBND')
+InAV_SBND = functools.partial(util.InAV, det='SBND')
 
 
 def k_has_daughter(df: pd.DataFrame, ktype: str, require_contained: bool=True) -> pd.DataFrame:
@@ -48,7 +49,7 @@ def k_has_daughter(df: pd.DataFrame, ktype: str, require_contained: bool=True) -
     """
     daughter_rows = ~df.is_primary & ((df.pdg == -13) | (df.pdg == 211)) 
     if require_contained:
-        daughter_rows &= InFV_SBND(df.end)
+        daughter_rows &= InAV_SBND(df.end)
 
     primary_k_rows = (df.is_primary & (df.pdg == KPDG[ktype]))
 
@@ -70,9 +71,7 @@ def signal(df: pd.DataFrame, ktype: str, cc: bool=True) -> pd.DataFrame:
     # There must be a kaon
     has_k = (getattr(df, f'n{ktype}') > 0)
 
-    # kplus: kaon must have a muon daughter
-    # this means most hadronic interactions are not counted, but possibly
-    # some non-destructive hadronic interactions are?
+    # kplus: kaon must have a mu or pi daughter, daughter must be contained
     has_daughter = True
     if ktype == 'kplus':
         has_daughter = k_has_daughter(df, ktype, require_contained=True)
@@ -127,7 +126,7 @@ def make_kaon_mcdf(f: pd.DataFrame, signal_cut_columns: bool=False) -> pd.DataFr
     # finally, merge primaries into mc
     mcdf = ph.multicol_merge(mcdf, mcprimdf, how="left", left_index=True, right_index=True, validate="one_to_one")
 
-    mcdf['is_true_fv'] = InFV_SBND(df.position)
+    mcdf['is_true_fv'] = InFV_SBND(mcdf.position)
     mcdf['is_signal_kp_cc'] = signal(mcdf, ktype='kplus', cc=True)
     mcdf['is_signal_kp_nc'] = signal(mcdf, ktype='kplus', cc=False)
 
