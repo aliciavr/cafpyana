@@ -4,7 +4,10 @@ __pycache__/
 *.df
 *.png
 *.root
-envs/
 #*
 .#
 *~
+
+# aliciavr
+**/.ipynb_checkpoints/
+envs/
